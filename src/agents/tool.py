@@ -9,7 +9,7 @@ import json
 import math
 import typing
 import weakref
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import FunctionType, UnionType
@@ -1831,6 +1831,7 @@ def validate_responses_programmatic_tool_calling_configuration(
     tools: list[Tool],
     *,
     tool_choice: Literal["auto", "required", "none"] | str | Any | None = None,
+    handoff_tool_names: Sequence[str] | None = None,
     allow_opaque_tool_search_surface: bool = False,
 ) -> None:
     """Validate the complete Responses Programmatic Tool Calling configuration."""
@@ -1841,7 +1842,18 @@ def validate_responses_programmatic_tool_calling_configuration(
         )
 
     has_programmatic_tool = bool(programmatic_tools)
-    if tool_choice == "programmatic_tool_calling" and not has_programmatic_tool:
+    has_matching_top_level_function = any(
+        isinstance(tool, FunctionTool)
+        and tool.name == "programmatic_tool_calling"
+        and get_explicit_function_tool_namespace(tool) is None
+        and not tool.defer_loading
+        for tool in tools
+    ) or (isinstance(tool_choice, str) and tool_choice in (handoff_tool_names or ()))
+    if (
+        tool_choice == "programmatic_tool_calling"
+        and not has_programmatic_tool
+        and not has_matching_top_level_function
+    ):
         raise UserError(
             "tool_choice='programmatic_tool_calling' requires ProgrammaticToolCallingTool() "
             "when using OpenAI Responses models."

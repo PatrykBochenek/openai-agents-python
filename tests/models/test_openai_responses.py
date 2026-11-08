@@ -262,6 +262,63 @@ async def test_unpaired_function_output_preserved_in_responses_request(
 @pytest.mark.allow_call_model_methods
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+async def test_function_tool_named_web_search_sends_function_tool_choice(stream: bool) -> None:
+    """Issue #5472: tool_choice="web_search" targets the developer's function tool,
+    not the hosted web_search selector.
+    """
+    request_bodies: list[dict[str, Any]] = []
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        request_bodies.append(json.loads(request.content))
+        if stream:
+            event = _response_completed_frame("resp-id", sequence_number=0)
+            return httpx2.Response(
+                200,
+                content=f"event: response.completed\ndata: {event}\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx2.Response(
+            200,
+            content=get_response_obj([]).model_dump_json(),
+            headers={"content-type": "application/json"},
+        )
+
+    web_search_function = function_tool(lambda: "ok", name_override="web_search")
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+        model = OpenAIResponsesModel(
+            model="gpt-4o",
+            openai_client=AsyncOpenAI(api_key="test-key", http_client=http_client),
+        )
+        request_kwargs: dict[str, Any] = {
+            "system_instructions": None,
+            "input": "hi",
+            "model_settings": ModelSettings(tool_choice="web_search"),
+            "tools": [web_search_function],
+            "output_schema": None,
+            "handoffs": [],
+            "tracing": ModelTracing.DISABLED,
+        }
+        if stream:
+            async for _ in model.stream_response(**request_kwargs):
+                pass
+        else:
+            await model.get_response(**request_kwargs)
+
+    assert len(request_bodies) == 1
+    body = request_bodies[0]
+    assert body["tool_choice"] == {"type": "function", "name": "web_search"}
+    function_tool_entries = [
+        tool
+        for tool in body["tools"]
+        if tool.get("type") == "function" and tool.get("name") == "web_search"
+    ]
+    assert len(function_tool_entries) == 1
+    assert function_tool_entries[0]["name"] == "web_search"
+
+
+@pytest.mark.allow_call_model_methods
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
 @pytest.mark.parametrize(
     "tool_options, expected_include",
     [

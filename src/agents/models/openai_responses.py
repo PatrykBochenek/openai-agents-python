@@ -1829,6 +1829,23 @@ class Converter:
             payload["type"] = "local"
         return payload
 
+    _HOSTED_TOOL_CHOICE_NAMES = frozenset(
+        {
+            "file_search",
+            "web_search",
+            "web_search_preview",
+            "computer",
+            "computer_use",
+            "computer_use_preview",
+            "image_generation",
+            "code_interpreter",
+            "shell",
+            "apply_patch",
+            "mcp",
+            "programmatic_tool_calling",
+        }
+    )
+
     @classmethod
     def convert_tool_choice(
         cls,
@@ -1853,6 +1870,17 @@ class Converter:
             return "auto"
         elif tool_choice == "none":
             return "none"
+        elif (
+            isinstance(tool_choice, str)
+            and tool_choice in cls._HOSTED_TOOL_CHOICE_NAMES
+            and cls._has_top_level_function_named(tool_choice, tools=tools, handoffs=handoffs)
+        ):
+            # A top-level function tool or handoff with the same name as a hosted built-in
+            # wins over the hosted tool selector; see https://github.com/openai/openai-agents-python/issues/5472.
+            return {
+                "type": "function",
+                "name": tool_choice,
+            }
         elif tool_choice == "programmatic_tool_calling":
             return cast(
                 response_create_params.ToolChoice,
@@ -2025,6 +2053,34 @@ class Converter:
         return any(isinstance(tool, ComputerTool) for tool in tools or ())
 
     @classmethod
+    def _has_top_level_function_named(
+        cls,
+        tool_choice: str,
+        *,
+        tools: Sequence[Tool] | None,
+        handoffs: Sequence[Handoff[Any, Any]] | None,
+    ) -> bool:
+        """Check for a top-level, non-namespaced, non-deferred function tool or handoff
+        with the given name.
+        """
+        for handoff in handoffs or ():
+            if handoff.tool_name == tool_choice:
+                return True
+
+        for tool in tools or ():
+            if not isinstance(tool, FunctionTool):
+                continue
+            if tool.name != tool_choice:
+                continue
+            if get_explicit_function_tool_namespace(tool) is not None:
+                continue
+            if tool.defer_loading:
+                continue
+            return True
+
+        return False
+
+    @classmethod
     def _has_unresolved_computer_tool(cls, tools: Sequence[Tool] | None) -> bool:
         return any(
             isinstance(tool, ComputerTool)
@@ -2137,6 +2193,7 @@ class Converter:
         validate_responses_programmatic_tool_calling_configuration(
             tools,
             tool_choice=tool_choice,
+            handoff_tool_names=[handoff.tool_name for handoff in handoffs],
             allow_opaque_tool_search_surface=allow_opaque_tool_search_surface,
         )
 

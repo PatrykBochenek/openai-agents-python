@@ -61,7 +61,9 @@ from agents import (
     Usage,
     UserError,
     function_tool,
+    handoff,
     tool_input_guardrail,
+    tool_namespace,
     tool_output_guardrail,
 )
 from agents.exceptions import ModelBehaviorError
@@ -249,6 +251,74 @@ def test_responses_converter_serializes_programmatic_tool_configuration() -> Non
     assert ResponsesConverter.convert_tool_choice("programmatic_tool_calling") == {
         "type": "programmatic_tool_calling"
     }
+
+
+def test_tool_choice_programmatic_targets_matching_top_level_function() -> None:
+    """Issue #5472: a top-level function tool named `programmatic_tool_calling`
+    overrides the hosted selector.
+    """
+    named_function = function_tool(lambda: "ok", name_override="programmatic_tool_calling")
+
+    assert ResponsesConverter.convert_tool_choice(
+        "programmatic_tool_calling",
+        tools=[named_function],
+        handoffs=[],
+    ) == {
+        "type": "function",
+        "name": "programmatic_tool_calling",
+    }
+    converted = ResponsesConverter.convert_tools(
+        tools=[named_function],
+        handoffs=[],
+        tool_choice="programmatic_tool_calling",
+    )
+    assert [cast(dict[str, Any], tool)["name"] for tool in converted.tools] == [
+        "programmatic_tool_calling"
+    ]
+
+    named_handoff = handoff(Agent(name="x"), tool_name_override="programmatic_tool_calling")
+
+    assert ResponsesConverter.convert_tool_choice(
+        "programmatic_tool_calling",
+        tools=[],
+        handoffs=[named_handoff],
+    ) == {
+        "type": "function",
+        "name": "programmatic_tool_calling",
+    }
+    handoff_converted = ResponsesConverter.convert_tools(
+        tools=[],
+        handoffs=[named_handoff],
+        tool_choice="programmatic_tool_calling",
+    )
+    assert [cast(dict[str, Any], tool)["name"] for tool in handoff_converted.tools] == [
+        "programmatic_tool_calling"
+    ]
+
+    namespaced_tool = tool_namespace(
+        name="crm",
+        description="CRM tools",
+        tools=[function_tool(lambda: "ok", name_override="programmatic_tool_calling")],
+    )[0]
+    deferred_tool = function_tool(
+        lambda: "ok",
+        name_override="programmatic_tool_calling",
+        defer_loading=True,
+    )
+
+    with pytest.raises(UserError, match="requires ProgrammaticToolCallingTool"):
+        ResponsesConverter.convert_tools(
+            tools=[namespaced_tool],
+            handoffs=[],
+            tool_choice="programmatic_tool_calling",
+        )
+
+    with pytest.raises(UserError, match="requires ProgrammaticToolCallingTool"):
+        ResponsesConverter.convert_tools(
+            tools=[deferred_tool, ToolSearchTool()],
+            handoffs=[],
+            tool_choice="programmatic_tool_calling",
+        )
 
 
 def test_function_tool_infers_typed_dict_and_dataclass_output_schemas() -> None:

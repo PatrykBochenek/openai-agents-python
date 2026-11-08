@@ -231,6 +231,124 @@ def test_convert_tool_choice_allows_function_named_tool_search_with_hosted_tool_
     }
 
 
+@pytest.mark.parametrize(
+    "name",
+    sorted(Converter._HOSTED_TOOL_CHOICE_NAMES),
+)
+def test_convert_tool_choice_hosted_name_prefers_top_level_function(name: str) -> None:
+    tool = function_tool(lambda: "ok", name_override=name)
+
+    assert Converter.convert_tool_choice(name, tools=[tool], handoffs=[]) == {
+        "type": "function",
+        "name": name,
+    }
+
+
+def test_convert_tool_choice_function_wins_over_hosted_web_search() -> None:
+    web_search_function = function_tool(lambda query: query, name_override="web_search")
+
+    assert Converter.convert_tool_choice(
+        "web_search",
+        tools=[web_search_function, WebSearchTool()],
+        handoffs=[],
+    ) == {
+        "type": "function",
+        "name": "web_search",
+    }
+
+
+def test_convert_tool_choice_function_wins_over_hosted_shell() -> None:
+    shell_function = function_tool(lambda: "ok", name_override="shell")
+    shell_tool = ShellTool(executor=lambda request: "ok")
+
+    assert Converter.convert_tool_choice(
+        "shell",
+        tools=[shell_function, shell_tool],
+        handoffs=[],
+    ) == {
+        "type": "function",
+        "name": "shell",
+    }
+
+
+def test_convert_tool_choice_function_wins_over_hosted_apply_patch() -> None:
+    apply_patch_function = function_tool(lambda: "ok", name_override="apply_patch")
+    apply_patch_tool = ApplyPatchTool(editor=cast(Any, object()))
+
+    assert Converter.convert_tool_choice(
+        "apply_patch",
+        tools=[apply_patch_function, apply_patch_tool],
+        handoffs=[],
+    ) == {
+        "type": "function",
+        "name": "apply_patch",
+    }
+
+
+def test_convert_tool_choice_function_wins_over_hosted_computer() -> None:
+    computer_function = function_tool(lambda: "ok", name_override="computer")
+    computer_tool = ComputerTool(computer=DummyComputer())
+
+    assert Converter.convert_tool_choice(
+        "computer",
+        tools=[computer_function, computer_tool],
+        handoffs=[],
+    ) == {
+        "type": "function",
+        "name": "computer",
+    }
+
+
+def test_convert_tool_choice_hosted_name_prefers_matching_handoff() -> None:
+    web_search_handoff = handoff(Agent(name="x"), tool_name_override="web_search")
+
+    assert Converter.convert_tool_choice(
+        "web_search",
+        tools=[],
+        handoffs=[web_search_handoff],
+    ) == {
+        "type": "function",
+        "name": "web_search",
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ("file_search", {"type": "file_search"}),
+        ("web_search", {"type": "web_search"}),
+        ("web_search_preview", {"type": "web_search_preview"}),
+        ("image_generation", {"type": "image_generation"}),
+        ("code_interpreter", {"type": "code_interpreter"}),
+        ("mcp", {"type": "mcp"}),
+        ("programmatic_tool_calling", {"type": "programmatic_tool_calling"}),
+        ("computer_use_preview", {"type": "computer_use_preview"}),
+    ],
+)
+def test_convert_tool_choice_hosted_name_without_match_keeps_hosted_selector(
+    tool_choice: str,
+    expected: dict[str, str],
+) -> None:
+    assert Converter.convert_tool_choice(tool_choice, tools=[], handoffs=[]) == expected
+
+
+def test_convert_tool_choice_namespaced_and_deferred_tools_do_not_override_hosted_selector() -> (
+    None
+):
+    namespaced_tool = tool_namespace(
+        name="crm",
+        description="CRM tools",
+        tools=[function_tool(lambda: "ok", name_override="web_search")],
+    )[0]
+    deferred_tool = function_tool(lambda: "ok", name_override="web_search", defer_loading=True)
+
+    assert Converter.convert_tool_choice(
+        "web_search",
+        tools=[namespaced_tool, deferred_tool],
+        handoffs=[],
+    ) == {"type": "web_search"}
+
+
 def test_convert_tool_choice_required_allows_eager_namespace_tools_without_tool_search() -> None:
     tools = tool_namespace(
         name="crm",
